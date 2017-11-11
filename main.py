@@ -2,14 +2,12 @@
 Python sample demonstrating use of Microsoft Translator Speech Translation API.
 """
 
-import os
 import io
 import struct
 import _thread
 import time
 import uuid
 import wave
-import sys
 import pyaudio
 
 import websocket
@@ -111,12 +109,13 @@ if __name__ == "__main__":
     # Audio file(s) to transcribe
     audio_file = 'audio_files/CHI101-Lesson1.wav'
     audio_source = WaveFileAudioSource(audio_file, 100, 2000)
+
+    # Languages: en-Us, zh-Hans, es, hi
+
     # Translate from this language. The language must match the source audio.
-    # Supported languages are given by the 'speech' scope of the supported languages API.
-    translate_from = 'zh-Hans'
+    translate_from = 'en-Us'
     # Translate to this language.
-    # Supported languages are given by the 'text' scope of the supported languages API.
-    translate_to = 'en-US'
+    translate_to = 'zh-Hans'
     # Features requested by the client.
     features = 'Partial'
 
@@ -153,7 +152,8 @@ if __name__ == "__main__":
                             channels=CHANNELS,
                             rate=RATE,
                             input=True,
-                            output=True,
+                            output=False,
+                            input_device_index=0,
                             stream_callback=callback)
 
             stream.start_stream()
@@ -197,27 +197,6 @@ if __name__ == "__main__":
         :param fin: Websocket FIN bit. If 0, the data continues.
         """
         print('\n', message, '\n')
-        # if message_type == websocket.ABNF.OPCODE_TEXT:
-        #     print('\n', message, '\n')
-        # else:
-        #     tts_count = tts_state['count']
-        #     tts_file = tts_state.get('file', None)
-        #     if tts_file is None:
-        #         tts_count += 1
-        #         tts_state['count'] = tts_count
-
-        #         fname = "tts_{0}.wav".format(tts_count)
-        #         print("\nTTS segment #{0} begins (file name: '{1}').\n".format(tts_count, fname))
-        #         if not os.path.exists(output_folder):
-        #             os.makedirs(output_folder)
-        #         tts_file = open(os.path.join(output_folder, fname), 'wb')
-        #         tts_state['file'] = tts_file
-        #     tts_file.write(message)
-        #     if fin:
-        #         print('\n', "TTS segment #{0} ends.'.".format(tts_count), '\n')
-        #         tts_file.close()
-        #         del tts_state['file']
-
 
     client_trace_id = str(uuid.uuid4())
     request_url = "wss://dev.microsofttranslator.com/speech/translate?from={0}&to={1}&features={2}&api-version=1.0".format(
