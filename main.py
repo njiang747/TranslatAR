@@ -10,6 +10,7 @@ import time
 import uuid
 import wave
 import sys
+import pyaudio
 
 import websocket
 
@@ -109,7 +110,7 @@ if __name__ == "__main__":
 
     # Audio file(s) to transcribe
     audio_file = 'audio_files/CHI101-Lesson1.wav'
-    audio_source = WaveFileAudioSource(audio_file, 100, 1000)
+    audio_source = WaveFileAudioSource(audio_file, 100, 2000)
     # Translate from this language. The language must match the source audio.
     # Supported languages are given by the 'speech' scope of the supported languages API.
     translate_from = 'zh-Hans'
@@ -136,15 +137,34 @@ if __name__ == "__main__":
             # Send WAVE header to provide audio format information
             data = get_wave_header(audio_source.getframerate())
             ws.send(data, websocket.ABNF.OPCODE_BINARY)
-            # Stream audio one chunk at a time
-            for data in audio_source:
-                sys.stdout.write('.')
-                ws.send(data, websocket.ABNF.OPCODE_BINARY)
+
+            # Send input data from the mic to be translated
+            WIDTH = 2
+            CHANNELS = 1
+            RATE = 16000
+
+            p = pyaudio.PyAudio()
+
+            def callback(in_data, frame_count, time_info, status):
+                ws.send(in_data, websocket.ABNF.OPCODE_BINARY)
+                return (in_data, pyaudio.paContinue)
+
+            stream = p.open(format=p.get_format_from_width(WIDTH),
+                            channels=CHANNELS,
+                            rate=RATE,
+                            input=True,
+                            output=True,
+                            stream_callback=callback)
+
+            stream.start_stream()
+
+            while stream.is_active():
                 time.sleep(0.1)
 
-            audio_source.close()
-            ws.close()
-            print('Background thread terminating...')
+            stream.stop_stream()
+            stream.close()
+
+            p.terminate()
 
         _thread.start_new_thread(run, ())
 
