@@ -1,16 +1,17 @@
+from PIL import Image, ImageFont, ImageDraw
+from AppKit import NSScreen
+
+import cv2
 import io
+import json
+import numpy as np
+import pyaudio
 import struct
+import textwrap
 import _thread
 import time
 import uuid
-import pyaudio
 import websocket
-import numpy as np
-import cv2
-import json
-from PIL import Image, ImageFont, ImageDraw
-from AppKit import NSScreen
-import textwrap
 
 screenwidth = int(NSScreen.mainScreen().frame().size.width)
 screenheight = int(NSScreen.mainScreen().frame().size.height)
@@ -143,12 +144,12 @@ if __name__ == "__main__":
                 speaker_num = sp_num
                 text = data['translation']
             else:
-                text = text + '.'
+                text = text + ' .'
             print('\n', message, '\n')
         return on_data
 
     # translate_from, translate_to, device_id
-    translations = [('zh-Hans', 'en-Us', 2)] # , [('en-Us', 'fr')]  # ('zh-Hans', 'en-Us'), ('es', 'en-Us')
+    translations = [('zh-Hans', 'en-Us', 0), ('es', 'en-Us', 4)]
 
     # Features requested by the client.
     features = 'Partial'
@@ -173,7 +174,7 @@ if __name__ == "__main__":
         _thread.start_new_thread(ws_client.run_forever, ())
 
     # start video capture
-    img_capture = cv2.VideoCapture(1)
+    img_capture = cv2.VideoCapture(0)
     while True:
         _, img = img_capture.read()
 
