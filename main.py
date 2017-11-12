@@ -8,7 +8,9 @@ import websocket
 import numpy as np
 import cv2
 import json
+from PIL import Image, ImageFont, ImageDraw
 from AppKit import NSScreen
+import textwrap
 
 screenwidth = int(NSScreen.mainScreen().frame().size.width)
 screenheight = int(NSScreen.mainScreen().frame().size.height)
@@ -53,6 +55,8 @@ def get_wave_header(frame_rate):
 if __name__ == "__main__":
     client_secret = '7a403254d0ea4998af9b03a836361618'
     text = ''
+    speaker_num = 0
+
 
     # Setup functions for the Websocket connection
     def on_open_wrapper(device_id):
@@ -100,9 +104,9 @@ if __name__ == "__main__":
                 stream.close()
 
                 p.terminate()
-
             _thread.start_new_thread(run, ())
         return on_open
+
 
     def on_close(ws):
         """
@@ -121,30 +125,36 @@ if __name__ == "__main__":
         """
         print(error)
 
-    # make a wrapper to generate different on_data functions that change different text
-    def on_data(ws, message, message_type, fin):
-        """
-        Callback executed when Websocket messages are received from the server.
 
-        :param ws: Websocket client.
-        :param message: Message data as utf-8 string.
-        :param message_type: Message type: ABNF.OPCODE_TEXT or ABNF.OPCODE_BINARY.
-        :param fin: Websocket FIN bit. If 0, the data continues.
-        """
-        global text
+    def on_data_wrapper(sp_num):
+        def on_data(ws, message, message_type, fin):
+            """
+            Callback executed when Websocket messages are received from the server.
 
-        data = json.loads(message)
-        text = data['translation']
-        print('\n', message, '\n')
+            :param ws: Websocket client.
+            :param message: Message data as utf-8 string.
+            :param message_type: Message type: ABNF.OPCODE_TEXT or ABNF.OPCODE_BINARY.
+            :param fin: Websocket FIN bit. If 0, the data continues.
+            """
+            global text, speaker_num
 
+            data = json.loads(message)
+            if data['type'] == 'final':
+                speaker_num = sp_num
+                text = data['translation']
+            else:
+                text = text + '.'
+            print('\n', message, '\n')
+        return on_data
 
-    # Languages: en-Us, zh-Hans, es, hi
-    translations = [ ('en-Us', 'zh-Hans', 2), ('es', 'en-Us', 0)] #[('en-Us', 'fr')]  # ('zh-Hans', 'en-Us'), ('es', 'en-Us')
+    # translate_from, translate_to, device_id
+    translations = [('zh-Hans', 'en-Us', 2)] # , [('en-Us', 'fr')]  # ('zh-Hans', 'en-Us'), ('es', 'en-Us')
 
     # Features requested by the client.
     features = 'Partial'
 
-    for translate_from, translate_to, device_id in translations:
+    for i in range(0, len(translations)):
+        translate_from, translate_to, device_id = translations[i]
         client_trace_id = str(uuid.uuid4())
         request_url = "wss://dev.microsofttranslator.com/speech/translate?from={0}&to={1}&features={2}&api-version=1.0".format(
             translate_from, translate_to, features)
@@ -156,32 +166,46 @@ if __name__ == "__main__":
                 'X-ClientTraceId: ' + client_trace_id,
             ],
             on_open=on_open_wrapper(device_id),
-            on_data=on_data,
+            on_data=on_data_wrapper(i),
             on_error=on_error,
             on_close=on_close
         )
         _thread.start_new_thread(ws_client.run_forever, ())
 
     # start video capture
-    left = cv2.VideoCapture(0)
-    right = cv2.VideoCapture(0)
+    img_capture = cv2.VideoCapture(1)
     while True:
-        _, left_img = left.read()
-        _, right_img = right.read()
+        _, img = img_capture.read()
 
-        height, width, _ = left_img.shape
+        height, width, _ = img.shape
         scaledheight = screenheight
         scaledwidth = int(width * screenheight / height)
 
-        left_img = cv2.resize(left_img, (scaledwidth, scaledheight))
-        right_img = cv2.resize(right_img, (scaledwidth, scaledheight))
+        img = cv2.resize(img, (scaledwidth, scaledheight))
 
         cutoff = int(scaledwidth / 2 - screenwidth / 4)
+        cropped = img[:, cutoff:-cutoff, :]
 
-        comb = np.concatenate((left_img[:, cutoff:-cutoff, :], right_img[:, cutoff:-cutoff, :]), axis=1)
+        cropped = Image.fromarray(np.uint8(cropped))
+        draw = ImageDraw.Draw(cropped)
+        font = ImageFont.truetype("/Library/Fonts/Impact.ttf", 42, encoding="unic")
+        margin = 70
+        offset = screenheight - 10 * 40
+        shadowcolor = "black"
+        fillcolor = "white" if speaker_num == 0 else "cyan"
 
-        cv2.putText(comb, text, (200, 200), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
+        for line in textwrap.wrap(text, width=35):
+            draw.text((margin - 1, offset + 1), line, font=font, fill=shadowcolor)
+            draw.text((margin - 1, offset - 1), line, font=font, fill=shadowcolor)
+            draw.text((margin + 1, offset - 1), line, font=font, fill=shadowcolor)
+            draw.text((margin + 1, offset + 1), line, font=font, fill=shadowcolor)
+            draw.text((margin, offset), line, font=font, fill=fillcolor)
 
-        cv2.imshow('dongLe', comb)
+            offset += font.getsize(line)[1]
+
+        cropped = np.array(cropped)
+        comb = np.concatenate((cropped, cropped), axis=1)
+
+        cv2.imshow('TranslatAR', comb)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
