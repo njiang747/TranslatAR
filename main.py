@@ -1,16 +1,17 @@
-"""
-Python sample demonstrating use of Microsoft Translator Speech Translation API.
-"""
-
 import io
 import struct
 import _thread
 import time
 import uuid
-import wave
 import pyaudio
-
 import websocket
+import numpy as np
+import cv2
+import json
+from AppKit import NSScreen
+
+screenwidth = int(NSScreen.mainScreen().frame().size.width)
+screenheight = int(NSScreen.mainScreen().frame().size.height)
 
 
 def get_wave_header(frame_rate):
@@ -49,125 +50,59 @@ def get_wave_header(frame_rate):
     return data
 
 
-class WaveFileAudioSource(object):
-    """
-    Provides a way to read audio from the DATA section of a WAV file in chunks of
-    a specified duration.
-    """
-
-    def __init__(self, path, chunk_length, silence_duration):
-        """
-        :param path: Path to WAV file. Acceptable WAV files use PCM single channel
-            with 16-bit samples and sampling frequency of 8 kHz or 16 kHz.
-        :param chunk_length: Length of chunk in milliseconds. The chunk length should
-            be a multiple of 10ms and in the range from 100ms to 1000ms.
-        :param silence_duration: Optionally follow audio from the file with silence.
-            Speech recognizer uses silence to find end of utterances. Silence duration
-            is given in milliseconds.
-        """
-        self.input = wave.open(path, 'rb')
-
-        if self.input.getnchannels() != 1:
-            raise ValueError("Input audio file should have a single channel.")
-        if self.input.getframerate() not in [8000, 16000]:
-            raise ValueError("Input audio file should have sampling frequency of 8 or 16 kHz.")
-        if self.input.getsampwidth() != 2:
-            raise ValueError("Input audio file should have 16-bit samples.")
-        if chunk_length % 10 != 0 or chunk_length < 100 or chunk_length > 1000:
-            raise ValueError("Chunk length is too small, too large or not a multiple of 10 ms.")
-
-        self.chunk_length = chunk_length
-        self.chunk_size = int(self.input.getframerate() / (1000.0 / chunk_length))
-        self.silence_duration = silence_duration
-        self.silence_chunk = [0] * (2 * self.chunk_size)
-        self.eof_reached = False
-
-    def getframerate(self):
-        return self.input.getframerate()
-
-    def close(self):
-        self.input.close()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if not self.eof_reached:
-            data = self.input.readframes(self.chunk_size)
-            if len(data) > 0:
-                return data
-            self.eof_reached = True
-        if self.silence_duration > 0:
-            self.silence_duration -= self.chunk_length
-            return self.silence_chunk
-        raise StopIteration
-
-
 if __name__ == "__main__":
     client_secret = '7a403254d0ea4998af9b03a836361618'
-
-    # Audio file(s) to transcribe
-    audio_file = 'audio_files/CHI101-Lesson1.wav'
-    audio_source = WaveFileAudioSource(audio_file, 100, 2000)
-
-    # Languages: en-Us, zh-Hans, es, hi
-
-    # Translate from this language. The language must match the source audio.
-    translate_from = 'en-Us'
-    # Translate to this language.
-    translate_to = 'zh-Hans'
-    # Features requested by the client.
-    features = 'Partial'
-
+    text = ''
 
     # Setup functions for the Websocket connection
-    def on_open(ws):
-        """
-        Callback executed once the Websocket connection is opened.
-        This function handles streaming of audio to the server.
+    def on_open_wrapper(device_id):
+        def on_open(ws):
+            """
+            Callback executed once the Websocket connection is opened.
+            This function handles streaming of audio to the server.
 
-        :param ws: Websocket client.
-        """
-        print('Connected. Server generated request ID = ', ws.sock.headers['x-requestid'])
+            :param ws: Websocket client.
+            """
+            print('Connected. Server generated request ID = ', ws.sock.headers['x-requestid'])
 
-        def run(*args):
-            """Background task which streams audio."""
+            def run(*args):
+                """Background task which streams audio."""
 
-            # Send WAVE header to provide audio format information
-            data = get_wave_header(audio_source.getframerate())
-            ws.send(data, websocket.ABNF.OPCODE_BINARY)
+                # Send input data from the mic to be translated
+                msg_width = 2
+                channels = 1
+                framerate = 16000
 
-            # Send input data from the mic to be translated
-            WIDTH = 2
-            CHANNELS = 1
-            RATE = 16000
+                # Send WAVE header to provide audio format information
+                data = get_wave_header(framerate)
+                ws.send(data, websocket.ABNF.OPCODE_BINARY)
 
-            p = pyaudio.PyAudio()
+                p = pyaudio.PyAudio()
 
-            def callback(in_data, frame_count, time_info, status):
-                ws.send(in_data, websocket.ABNF.OPCODE_BINARY)
-                return (in_data, pyaudio.paContinue)
+                def callback(in_data, frame_count, time_info, status):
+                    ws.send(in_data, websocket.ABNF.OPCODE_BINARY)
+                    return (in_data, pyaudio.paContinue)
 
-            stream = p.open(format=p.get_format_from_width(WIDTH),
-                            channels=CHANNELS,
-                            rate=RATE,
-                            input=True,
-                            output=False,
-                            input_device_index=0,
-                            stream_callback=callback)
+                stream = p.open(format=p.get_format_from_width(msg_width),
+                                channels=channels,
+                                rate=framerate,
+                                input=True,
+                                output=False,
+                                input_device_index=device_id,
+                                stream_callback=callback)
 
-            stream.start_stream()
+                stream.start_stream()
 
-            while stream.is_active():
-                time.sleep(0.1)
+                while stream.is_active():
+                    time.sleep(0.1)
 
-            stream.stop_stream()
-            stream.close()
+                stream.stop_stream()
+                stream.close()
 
-            p.terminate()
+                p.terminate()
 
-        _thread.start_new_thread(run, ())
-
+            _thread.start_new_thread(run, ())
+        return on_open
 
     def on_close(ws):
         """
@@ -186,7 +121,7 @@ if __name__ == "__main__":
         """
         print(error)
 
-
+    # make a wrapper to generate different on_data functions that change different text
     def on_data(ws, message, message_type, fin):
         """
         Callback executed when Websocket messages are received from the server.
@@ -196,25 +131,57 @@ if __name__ == "__main__":
         :param message_type: Message type: ABNF.OPCODE_TEXT or ABNF.OPCODE_BINARY.
         :param fin: Websocket FIN bit. If 0, the data continues.
         """
+        global text
+
+        data = json.loads(message)
+        text = data['translation']
         print('\n', message, '\n')
 
-    client_trace_id = str(uuid.uuid4())
-    request_url = "wss://dev.microsofttranslator.com/speech/translate?from={0}&to={1}&features={2}&api-version=1.0".format(
-        translate_from, translate_to, features)
 
-    print("Ready to connect...")
-    print("Request URL      = {0})".format(request_url))
-    print("ClientTraceId    = {0}".format(client_trace_id))
+    # Languages: en-Us, zh-Hans, es, hi
+    translations = [ ('en-Us', 'zh-Hans', 2), ('es', 'en-Us', 0)] #[('en-Us', 'fr')]  # ('zh-Hans', 'en-Us'), ('es', 'en-Us')
 
-    ws_client = websocket.WebSocketApp(
-        request_url,
-        header=[
-            'Ocp-Apim-Subscription-Key: ' + client_secret,
-            'X-ClientTraceId: ' + client_trace_id
-        ],
-        on_open=on_open,
-        on_data=on_data,
-        on_error=on_error,
-        on_close=on_close
-    )
-    ws_client.run_forever()
+    # Features requested by the client.
+    features = 'Partial'
+
+    for translate_from, translate_to, device_id in translations:
+        client_trace_id = str(uuid.uuid4())
+        request_url = "wss://dev.microsofttranslator.com/speech/translate?from={0}&to={1}&features={2}&api-version=1.0".format(
+            translate_from, translate_to, features)
+
+        ws_client = websocket.WebSocketApp(
+            request_url,
+            header=[
+                'Ocp-Apim-Subscription-Key: ' + client_secret,
+                'X-ClientTraceId: ' + client_trace_id,
+            ],
+            on_open=on_open_wrapper(device_id),
+            on_data=on_data,
+            on_error=on_error,
+            on_close=on_close
+        )
+        _thread.start_new_thread(ws_client.run_forever, ())
+
+    # start video capture
+    left = cv2.VideoCapture(0)
+    right = cv2.VideoCapture(0)
+    while True:
+        _, left_img = left.read()
+        _, right_img = right.read()
+
+        height, width, _ = left_img.shape
+        scaledheight = screenheight
+        scaledwidth = int(width * screenheight / height)
+
+        left_img = cv2.resize(left_img, (scaledwidth, scaledheight))
+        right_img = cv2.resize(right_img, (scaledwidth, scaledheight))
+
+        cutoff = int(scaledwidth / 2 - screenwidth / 4)
+
+        comb = np.concatenate((left_img[:, cutoff:-cutoff, :], right_img[:, cutoff:-cutoff, :]), axis=1)
+
+        cv2.putText(comb, text, (200, 200), cv2.FONT_HERSHEY_SIMPLEX, 2, 255)
+
+        cv2.imshow('dongLe', comb)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
